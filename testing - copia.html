@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Rasca y Gana - Subway</title>
+  <style>
+    :root{--green:#6dbf3f;--dark:#1f6f2b;--yellow:#ffd400;--bg:#f3f7f2}
+    body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue';
+         background:linear-gradient(180deg,var(--bg),#e9f3e7);
+         min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(13,40,18,0.08);padding:20px;max-width:980px;width:100%}
+    header{display:flex;gap:16px;align-items:center}
+    .logo{width:68px;height:68px;border-radius:12px;background:linear-gradient(135deg,var(--green),var(--dark));
+          display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:22px}
+    h1{margin:0;font-size:20px;color:var(--dark)}
+    p.lead{margin:6px 0 18px;color:#2b5b36}
+    .board{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .scratch{background:linear-gradient(180deg,#ffffff,#f7f9f6);border-radius:12px;padding:8px;position:relative;overflow:hidden;border:2px solid rgba(0,0,0,0.04)}
+    .prize{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px}
+    .prize .icon{font-size:32px}
+    .prize .name{font-weight:700;color:var(--dark);font-size:14px;text-align:center}
+    .prize .price{font-weight:600;color:#6b6b6b;font-size:13px}
+    canvas.overlay{position:absolute;inset:0;border-radius:10px}
+    .controls{display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap}
+    button{background:var(--green);color:#fff;padding:10px 14px;border-radius:10px;border:0;font-weight:700;cursor:pointer}
+    button.secondary{background:#fff;color:var(--dark);border:2px solid var(--green)}
+    .message{margin-top:14px;padding:12px;border-radius:10px;background:linear-gradient(90deg,#fff,#f8fff6);
+             color:var(--dark);font-weight:700;display:flex;align-items:center;gap:10px}
+    .small{font-size:13px;color:#506b55;font-weight:500}
+    #confettiCanvas{position:fixed;left:0;top:0;pointer-events:none;width:100%;height:100%;z-index:9999}
+    footer{margin-top:12px;font-size:13px;color:#4a6b53;text-align:center}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <header>
+      <div class="logo">SUB</div>
+      <div>
+        <h1>Rasca y Gana - Temática Subway</h1>
+        <p class="lead">Rasca 3 casillas. Si al menos 2 son iguales, ganas ese premio.</p>
+      </div>
+    </header>
+
+    <div class="board" id="board"></div>
+
+    <div class="controls">
+      <button id="resetBtn">Jugar otra vez</button>
+      <div style="flex:1;text-align:right" class="small">
+        Premios: 🍪 Galleta ($10) · 🥤 Bebida ($20) · 🥪 Subway Clásico ($80) · ❌ Sigue participando ($0)
+      </div>
+    </div>
+
+    <div id="result" class="message" style="display:none"></div>
+    <footer>
+      Gracias por participar — diseño con temática Subway sin afiliación oficial.<br>
+      <strong>Juego desarrollado para la estudiante Daniela Díaz Lara.</strong>
+    </footer>
+  </div>
+
+  <canvas id="confettiCanvas"></canvas>
+
+  <script>
+  const PRIZES = [
+    {id:'galleta',name:'Galleta',emoji:'🍪',price:10,weight:3},
+    {id:'bebida',name:'Bebida',emoji:'🥤',price:20,weight:3},
+    {id:'subway',name:'Subway Clásico',emoji:'🥪',price:80,weight:2},
+    {id:'nada',name:'Sigue participando',emoji:'❌',price:0,weight:6}
+  ];
+
+  const board = document.getElementById('board');
+  const result = document.getElementById('result');
+  const confettiCanvas = document.getElementById('confettiCanvas');
+  confettiCanvas.width = window.innerWidth; 
+  confettiCanvas.height = window.innerHeight;
+
+  let cards = [];
+  let revealedCount = 0;
+  let chosen = [];
+
+  function randomizeCards(){
+    cards = [];
+    for(let i=0;i<9;i++){ // 3x3 tablero
+      const pick = weightedRandom(PRIZES);
+      cards.push({...pick,revealed:false});
+    }
+    revealedCount = 0;
+    chosen = [];
+  }
+
+  function weightedRandom(list){
+    const totalWeight = list.reduce((sum,p)=>sum+p.weight,0);
+    let r = Math.random()*totalWeight;
+    for(const item of list){
+      if(r < item.weight) return item;
+      r -= item.weight;
+    }
+    return list[0];
+  }
+
+  function buildBoard(){
+    board.innerHTML = '';
+    cards.forEach((c,idx)=>{
+      const wrap = document.createElement('div'); wrap.className='scratch';
+      const prize = document.createElement('div'); prize.className='prize';
+      prize.innerHTML = `
+        <div class="icon">${c.emoji}</div>
+        <div class="name">${c.name}</div>
+        <div class="price">${c.price>0?'$'+c.price:''}</div>`;
+      wrap.appendChild(prize);
+
+      const canv = document.createElement('canvas');
+      canv.className='overlay';
+      wrap.appendChild(canv);
+      board.appendChild(wrap);
+
+      setupScratch(canv, wrap, idx);
+    });
+  }
+
+  function setupScratch(canvasEl, containerEl, index){
+    const rect = containerEl.getBoundingClientRect();
+    canvasEl.width = rect.width;
+    canvasEl.height = rect.height;
+    const ctx = canvasEl.getContext('2d');
+    const gradient = ctx.createLinearGradient(0,0,canvasEl.width,canvasEl.height);
+    gradient.addColorStop(0,'#cbded0');
+    gradient.addColorStop(0.5,'#9fcc8c');
+    gradient.addColorStop(1,'#bfe3a6');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0,0,canvasEl.width,canvasEl.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.font = 'bold 14px Arial';
+    ctx.fillText('RASCA', 12, 22);
+
+    function revealInstant(){
+      if(!cards[index].revealed && revealedCount < 3){
+        cards[index].revealed = true;
+        revealedCount++;
+        chosen.push(cards[index]);
+        canvasEl.style.transition = 'opacity 0.5s ease';
+        canvasEl.style.opacity = '0';
+        setTimeout(()=>{ canvasEl.remove(); if(revealedCount===3) evaluateResult(); },600);
+      }
+    }
+
+    canvasEl.addEventListener('click', revealInstant);
+    canvasEl.addEventListener('touchstart', revealInstant);
+  }
+
+  function evaluateResult(){
+    const counts = {};
+    chosen.forEach(c=>{
+      counts[c.price] = (counts[c.price]||0)+1;
+    });
+    let wonPrize = null;
+    for(const p in counts){ if(p!="0" && counts[p]>=2){ wonPrize = Number(p); break; } }
+    if(wonPrize!==null){
+      const prizeObj = PRIZES.find(x=>x.price===wonPrize);
+      showWin(prizeObj.name, prizeObj.emoji);
+    } else {
+      showLose();
+    }
+  }
+
+  function showWin(name, emoji){
+    result.style.display='flex';
+    result.innerHTML = `🎉 <span>Felicidades — ganaste: ${emoji} ${name}!</span>`;
+    launchConfetti();
+  }
+  function showLose(){
+    result.style.display='flex';
+    result.innerHTML = `😅 <span>No ganaste esta vez. <small style="display:block;color:#6b6b6b;margin-top:6px">Gracias por jugar</small></span>`;
+  }
+
+  function launchConfetti(){
+    const ctx = confettiCanvas.getContext('2d');
+    const W = confettiCanvas.width = window.innerWidth;
+    const H = confettiCanvas.height = window.innerHeight;
+    const pieces = [];
+    const colors = ['#ffd400','#6dbf3f','#1f6f2b','#ffffff','#f9a825'];
+    for(let i=0;i<120;i++){
+      pieces.push({x:Math.random()*W,y:Math.random()*-H,vy:Math.random()*3+2,
+                   vx:(Math.random()-0.5)*4,size:Math.random()*6+3,
+                   color:colors[Math.floor(Math.random()*colors.length)],
+                   rot:Math.random()*360,rvel:(Math.random()-0.5)*10});
+    }
+    let t=0;
+    function render(){
+      ctx.clearRect(0,0,W,H);
+      for(const p of pieces){
+        p.x += p.vx; p.y += p.vy; p.vy += 0.03; p.rot += p.rvel*0.02;
+        if(p.y>H+50){ p.y = -10; p.x = Math.random()*W; p.vy = Math.random()*2+1; }
+        ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot*Math.PI/180);
+        ctx.fillStyle = p.color; ctx.fillRect(-p.size/2,-p.size/2,p.size,p.size);
+        ctx.restore();
+      }
+      t++; if(t<220) requestAnimationFrame(render); else ctx.clearRect(0,0,W,H);
+    }
+    render();
+  }
+
+  document.getElementById('resetBtn').addEventListener('click', resetGame);
+
+  function resetGame(){
+    result.style.display='none';
+    randomizeCards();
+    buildBoard();
+  }
+
+  randomizeCards();
+  buildBoard();
+  </script>
+</body>
+</html>
